@@ -255,8 +255,10 @@ namespace CS2_Metro
             RouteGeometryDiagnostics.AppendSummary(context.Diagnostics, context.RouteGeometrySummary);
 
             context.Diagnostics.AppendLine();
-            context.Diagnostics.AppendLine($"Subway lines exported: {export.Lines.Count(line => string.Equals(line.Mode, "metro", StringComparison.Ordinal))}");
-            context.Diagnostics.AppendLine($"Passenger intercity lines exported: {export.Lines.Count(line => string.Equals(line.Mode, "train", StringComparison.Ordinal))}");
+            context.Diagnostics.AppendLine($"Metro lines exported: {export.Lines.Count(line => string.Equals(line.Mode, PortableTransportModes.Metro, StringComparison.Ordinal))}");
+            context.Diagnostics.AppendLine($"Bus lines exported: {export.Lines.Count(line => string.Equals(line.Mode, PortableTransportModes.Bus, StringComparison.Ordinal))}");
+            context.Diagnostics.AppendLine($"Tram lines exported: {export.Lines.Count(line => string.Equals(line.Mode, PortableTransportModes.Tram, StringComparison.Ordinal))}");
+            context.Diagnostics.AppendLine($"Passenger intercity lines exported: {export.Lines.Count(line => string.Equals(line.Mode, PortableTransportModes.Train, StringComparison.Ordinal))}");
             context.Diagnostics.AppendLine($"Stations exported: {export.Stations.Count}");
 
             return export;
@@ -381,14 +383,34 @@ namespace CS2_Metro
             context.Diagnostics.AppendLine($"- Waypoint count: {waypointCount}");
             context.Diagnostics.AppendLine($"- Name: {lineName} (source: {lineNameSource})");
 
-            if (!IsSubwayLine(context, lineEntity, out string subwayReason))
+            string mode = ResolveLineMode(context, lineEntity, out string modeReason);
+            context.Diagnostics.AppendLine($"- Mode: {(mode ?? "unsupported")} ({modeReason})");
+            if (mode == null)
             {
-                context.Diagnostics.AppendLine($"- Skipped line: not identified as Subway. Checks: {subwayReason}");
+                context.Diagnostics.AppendLine($"- Skipped line: unsupported transport mode. Checks: {modeReason}");
                 context.Diagnostics.AppendLine();
                 return;
             }
 
-            context.Diagnostics.AppendLine($"- Subway match: {subwayReason}");
+            if (string.Equals(mode, PortableTransportModes.Train, StringComparison.Ordinal))
+            {
+                context.Diagnostics.AppendLine("- Skipped line: passenger train lines are handled by the intercity collector.");
+                context.Diagnostics.AppendLine();
+                return;
+            }
+
+            if (string.Equals(mode, PortableTransportModes.Metro, StringComparison.Ordinal))
+            {
+                if (!IsSubwayLine(context, lineEntity, out string subwayReason))
+                {
+                    context.Diagnostics.AppendLine($"- Skipped line: not identified as Subway. Checks: {subwayReason}");
+                    context.Diagnostics.AppendLine();
+                    return;
+                }
+
+                context.Diagnostics.AppendLine($"- Subway match: {subwayReason}");
+            }
+
             RouteGeometryDiagnostics.AppendLineDiagnostics(context.EntityManager, context.NameSystem, lineEntity, lineName, routeNumber, waypointCount, context.Diagnostics, context.RouteGeometrySummary);
 
             MetroLineExport line = new MetroLineExport
@@ -396,7 +418,7 @@ namespace CS2_Metro
                 Id = lineEntityId,
                 Name = lineName,
                 Color = color,
-                Mode = "metro"
+                Mode = mode
             };
             RoutePathPointExtractionResult pathPointResult = RoutePathPointExtractor.Extract(context.EntityManager, lineEntity);
             line.PathPoints.AddRange(pathPointResult.PathPoints);
@@ -664,6 +686,99 @@ namespace CS2_Metro
 
             station.IsInterchange = station.Lines.Count > 1;
             line.Stops.Add(station.Id);
+        }
+
+        /// <summary>
+        /// Maps the line prefab's TransportType to a portable transport mode token.
+        /// Returns null for unsupported modes (airlines, ships, cargo, taxis, etc.).
+        /// Passenger trains route through the dedicated intercity collector instead.
+        /// </summary>
+        private static string ResolveLineMode(ExportContext context, Entity lineEntity, out string reason)
+        {
+            List<string> checks = new List<string>();
+
+            try
+            {
+                if (context.EntityManager.HasComponent<PrefabRef>(lineEntity))
+                {
+                    Entity prefab = context.EntityManager.GetComponentData<PrefabRef>(lineEntity).m_Prefab;
+                    if (IsValidEntity(context.EntityManager, prefab)
+                        && context.EntityManager.HasComponent<TransportLineData>(prefab))
+                    {
+                        TransportType type = context.EntityManager.GetComponentData<TransportLineData>(prefab).m_TransportType;
+                        string mapped = MapTransportTypeToMode(type);
+                        if (mapped != null)
+                        {
+                            reason = $"TransportLineData prefab {FormatEntity(prefab)} transport type {type} -> {mapped}";
+                            return mapped;
+                        }
+
+                        checks.Add($"TransportLineData prefab {FormatEntity(prefab)} transport type {type} is not supported");
+                    }
+                    else
+                    {
+                        checks.Add($"TransportLineData prefab {FormatEntity(prefab)} missing or unreadable");
+                    }
+                }
+                else
+                {
+                    checks.Add("No PrefabRef on line");
+                }
+            }
+            catch (Exception ex)
+            {
+                checks.Add($"PrefabRef check failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            // Fallback: use the vehicle prefab when the line prefab is unreadable.
+            try
+            {
+                if (context.EntityManager.HasBuffer<VehicleModel>(lineEntity))
+                {
+                    DynamicBuffer<VehicleModel> models = context.EntityManager.GetBuffer<VehicleModel>(lineEntity, true);
+                    if (models.Length > 0)
+                    {
+                        Entity primaryPrefab = models[0].m_PrimaryPrefab;
+                        if (IsValidEntity(context.EntityManager, primaryPrefab)
+                            && context.EntityManager.HasComponent<PublicTransportVehicleData>(primaryPrefab))
+                        {
+                            TransportType type = context.EntityManager.GetComponentData<PublicTransportVehicleData>(primaryPrefab).m_TransportType;
+                            string mapped = MapTransportTypeToMode(type);
+                            if (mapped != null)
+                            {
+                                reason = $"VehicleModel[0].m_PrimaryPrefab {FormatEntity(primaryPrefab)} transport type {type} -> {mapped}";
+                                return mapped;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                checks.Add($"VehicleModel check failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
+            reason = string.Join("; ", checks.ToArray());
+            return null;
+        }
+
+        private static string MapTransportTypeToMode(TransportType type)
+        {
+            switch (type)
+            {
+                case TransportType.Subway:
+                    return PortableTransportModes.Metro;
+                case TransportType.Train:
+                    return PortableTransportModes.Train;
+                case TransportType.Bus:
+                    return PortableTransportModes.Bus;
+                case TransportType.Tram:
+                    return PortableTransportModes.Tram;
+                default:
+                    // Air, ship, taxi, mail, cargo and other types are not
+                    // part of the passenger transport map.
+                    return null;
+            }
         }
 
         private static bool IsSubwayLine(ExportContext context, Entity lineEntity, out string reason)

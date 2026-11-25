@@ -40,13 +40,15 @@ namespace CS2_Metro
             PortableLayoutMode layoutMode,
             bool showGenericStationNames,
             bool hideCrowdedLabels,
-            bool useChineseMapText)
+            bool useChineseMapText,
+            IReadOnlyCollection<string> visibleModes)
         {
             if (snapshot == null)
             {
                 throw new ArgumentNullException(nameof(snapshot));
             }
 
+            string visibleModesKey = PortableTransportModes.ToTokenList(visibleModes ?? Array.Empty<string>());
             Stopwatch requestTimer = Stopwatch.StartNew();
             string cacheKey = string.Format(
                 "{0}|{1}|{2}|{3}|{4}",
@@ -54,7 +56,8 @@ namespace CS2_Metro
                 layoutMode,
                 showGenericStationNames,
                 hideCrowdedLabels,
-                useChineseMapText);
+                useChineseMapText)
+                + "|" + visibleModesKey;
 
             lock (Sync)
             {
@@ -74,6 +77,7 @@ namespace CS2_Metro
             PortableRenderOptions options = layoutMode == PortableLayoutMode.Geographic
                 ? PortableRenderProfiles.CreateInGameGeographic(showGenericStationNames, hideCrowdedLabels)
                 : PortableRenderProfiles.CreateInGameSchematic(showGenericStationNames, hideCrowdedLabels);
+            options.VisibleModes = PortableTransportModes.Parse(visibleModesKey);
             if (useChineseMapText)
             {
                 options.TitleSuffix = "地铁线路图";

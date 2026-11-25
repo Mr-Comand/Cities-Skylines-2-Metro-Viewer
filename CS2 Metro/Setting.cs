@@ -139,6 +139,11 @@ namespace CS2_Metro
         [SettingsUIHidden]
         public bool InGamePreviewHideCrowdedLabels { get; set; } = true;
 
+        // Comma-separated transport modes shown in the in-game preview
+        // ("metro", "train", "bus", "tram"). Metro is always visible.
+        [SettingsUIHidden]
+        public string InGamePreviewEnabledModes { get; set; } = string.Empty;
+
         // Development-only gate for the isolated passenger intercity collector.
         // Keep this hidden and off until real CS2 exports have been reviewed.
         [SettingsUIHidden]
@@ -162,6 +167,7 @@ namespace CS2_Metro
             InGamePreviewGeographicDefaultApplied = false;
             InGamePreviewShowGenericStationNames = false;
             InGamePreviewHideCrowdedLabels = true;
+            InGamePreviewEnabledModes = string.Empty;
             ExportPassengerIntercityRailDevelopment = false;
         }
 

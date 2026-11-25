@@ -26,6 +26,10 @@ function copy(locale) {
         geographic: "地理图",
         generic: "显示默认站名",
         crowded: "隐藏拥挤标签",
+        modeMetro: "地铁",
+        modeTrain: "城际铁路",
+        modeBus: "公交",
+        modeTram: "电车",
         exportJson: "导出 JSON",
         saveSvg: "保存当前 SVG",
         fit: "适应窗口",
@@ -62,6 +66,10 @@ function copy(locale) {
         geographic: "Geographic",
         generic: "Show default station names",
         crowded: "Hide crowded labels",
+        modeMetro: "Metro",
+        modeTrain: "Intercity rail",
+        modeBus: "Bus",
+        modeTram: "Tram",
         exportJson: "Export JSON",
         saveSvg: "Save current SVG",
         fit: "Fit",
@@ -87,6 +95,47 @@ function copy(locale) {
         schematicViewerHint: "Schematic preview is still being refined; use the desktop Viewer for the most reliable result.",
         path: "Output",
       };
+}
+
+const MODE_LABEL_KEYS = {
+  metro: "modeMetro",
+  train: "modeTrain",
+  bus: "modeBus",
+  tram: "modeTram",
+};
+
+function modeToggles(state, text) {
+  const modes = Array.isArray(state.modes) ? state.modes : [];
+  const enabled = new Set(
+    Array.isArray(state.modes)
+      ? modes.filter((mode) => mode.enabled !== false).map((mode) => mode.mode)
+      : ["metro"],
+  );
+  return modes.map((mode) => ({
+    mode: mode.mode,
+    label: text[MODE_LABEL_KEYS[mode.mode]] || mode.label || mode.mode,
+    checked: enabled.has(mode.mode),
+    available: mode.mode === "metro" || mode.lineCount > 0,
+    lineCount: mode.lineCount || 0,
+    nextModes: (value) => {
+      // Metro is the core mode and the renderer always keeps it visible, so
+      // turning the metro toggle off is a no-op rather than an inconsistent
+      // state. Toggling another mode off can still leave metro only.
+      if (mode.mode === "metro" && value !== true) {
+        return null;
+      }
+      const next = new Set(enabled);
+      if (value) {
+        next.add(mode.mode);
+      } else {
+        next.delete(mode.mode);
+      }
+      if (next.size === 0) {
+        next.add("metro");
+      }
+      return Array.from(next).join(",");
+    },
+  }));
 }
 
 function parseState(value) {
@@ -597,6 +646,20 @@ function PreviewPanel() {
         label: text.crowded,
         onChange: (value) => api.trigger(GROUP, "setHideCrowdedLabels", value),
       }),
+      modeToggles(state, text).map((toggle) =>
+        h(Toggle, {
+          key: toggle.mode,
+          checked: toggle.checked,
+          disabled: busy || !toggle.available,
+          label: `${toggle.label}${toggle.available && toggle.lineCount ? ` (${toggle.lineCount})` : ""}`,
+          onChange: (value) => {
+            const modes = toggle.nextModes(value);
+            if (modes != null) {
+              api.trigger(GROUP, "setVisibleModes", modes);
+            }
+          },
+        }),
+      ),
       h("div", { style: { marginLeft: "auto", color: "#9fb6c5", fontSize: "11rem" } }, notice),
     ),
     h("div", { style: { flex: "1 1 auto", minHeight: 0, display: "flex", padding: "14rem" } },

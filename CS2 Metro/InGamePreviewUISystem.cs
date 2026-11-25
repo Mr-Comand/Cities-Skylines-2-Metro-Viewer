@@ -6,6 +6,7 @@ using MetroDiagram.Core.Exporting;
 using MetroDiagram.Engine;
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using UnityEngine.Scripting;
 
@@ -36,6 +37,7 @@ namespace CS2_Metro
         private PortableLayoutMode m_LayoutMode = PortableLayoutMode.Geographic;
         private bool m_ShowGenericStationNames;
         private bool m_HideCrowdedLabels = true;
+        private HashSet<string> m_VisibleModes = new HashSet<string>(StringComparer.Ordinal) { PortableTransportModes.Metro };
         private bool m_PanelOpen;
         private bool m_SettingsInitialized;
         private string m_LastInterfaceLanguage = string.Empty;
@@ -67,6 +69,7 @@ namespace CS2_Metro
             AddBinding(new TriggerBinding<string>(BindingGroup, "setLayout", SetLayout));
             AddBinding(new TriggerBinding<bool>(BindingGroup, "setShowGenericStationNames", SetShowGenericStationNames));
             AddBinding(new TriggerBinding<bool>(BindingGroup, "setHideCrowdedLabels", SetHideCrowdedLabels));
+            AddBinding(new TriggerBinding<string>(BindingGroup, "setVisibleModes", SetVisibleModes));
             AddBinding(new TriggerBinding(BindingGroup, "exportJson", RequestExportJson));
             AddBinding(new TriggerBinding(BindingGroup, "saveSvg", RequestSaveSvg));
 
@@ -140,6 +143,7 @@ namespace CS2_Metro
                 : PortableLayoutMode.SchematicAnneal;
             m_ShowGenericStationNames = Mod.Settings.InGamePreviewShowGenericStationNames;
             m_HideCrowdedLabels = Mod.Settings.InGamePreviewHideCrowdedLabels;
+            m_VisibleModes = PortableTransportModes.Parse(Mod.Settings.InGamePreviewEnabledModes);
             m_LastInterfaceLanguage = Mod.Settings.InterfaceLanguage ?? Setting.LanguageAuto;
             m_SettingsInitialized = true;
 
@@ -262,6 +266,26 @@ namespace CS2_Metro
             }
 
             m_HideCrowdedLabels = hide;
+            PersistPreviewSettings();
+            QueueRenderForSettingChange();
+        }
+
+        private void SetVisibleModes(string enabledModes)
+        {
+            HashSet<string> requested = PortableTransportModes.Parse(enabledModes);
+            if (PortableTransportModes.ToTokenList(requested) == PortableTransportModes.ToTokenList(m_VisibleModes))
+            {
+                return;
+            }
+
+            // Metro is the core mode and must never be fully hidden; the parse
+            // fallback also guarantees at least one mode remains selected.
+            if (requested.Count == 0)
+            {
+                requested = new HashSet<string>(StringComparer.Ordinal) { PortableTransportModes.Metro };
+            }
+
+            m_VisibleModes = requested;
             PersistPreviewSettings();
             QueueRenderForSettingChange();
         }
@@ -445,7 +469,8 @@ namespace CS2_Metro
                 m_LayoutMode,
                 m_ShowGenericStationNames,
                 m_HideCrowdedLabels,
-                ShouldUseChineseMapText());
+                ShouldUseChineseMapText(),
+                m_VisibleModes);
             PortableRenderResult result = response.Result;
             m_CurrentSvg = result.Svg;
             m_LastRenderMilliseconds = response.RequestElapsedMilliseconds;
@@ -514,6 +539,7 @@ namespace CS2_Metro
                 Mod.Settings.InGamePreviewGeographicDefaultApplied = true;
                 Mod.Settings.InGamePreviewShowGenericStationNames = m_ShowGenericStationNames;
                 Mod.Settings.InGamePreviewHideCrowdedLabels = m_HideCrowdedLabels;
+                Mod.Settings.InGamePreviewEnabledModes = PortableTransportModes.ToTokenList(m_VisibleModes);
                 Mod.Settings.ApplyAndSave();
             }
             catch (Exception ex)
@@ -594,6 +620,7 @@ namespace CS2_Metro
             AppendJsonNumber(builder, "canvasHeight", PreviewCanvasHeight);
             AppendJsonBoolean(builder, "showGenericStationNames", m_ShowGenericStationNames);
             AppendJsonBoolean(builder, "hideCrowdedLabels", m_HideCrowdedLabels);
+            AppendVisibleModesJson(builder, snapshot);
             AppendJsonBoolean(builder, "renderCacheHit", m_LastRenderWasCacheHit);
             AppendJsonBoolean(builder, "hasSvg", !string.IsNullOrWhiteSpace(m_CurrentSvg));
             AppendJsonBoolean(builder, "busy", IsBusyStatus(m_Status));
@@ -609,6 +636,70 @@ namespace CS2_Metro
         private static bool IsBusyStatus(string status)
         {
             return status == "loading" || status == "rendering" || status == "exporting" || status == "saving";
+        }
+
+        /// <summary>
+        /// Emits per-mode controls for the UI: "modes": [
+        /// {"mode":"metro","label":"Metro","enabled":true,"lineCount":3}, ... ].
+        /// Metro is always enabled; other modes are enabled only when captured
+        /// lines exist for them (so toggles don't appear for absent transport).
+        /// </summary>
+        private void AppendVisibleModesJson(StringBuilder builder, MetroNetworkSnapshot snapshot)
+        {
+            builder.Append("\"modes\":[");
+            string[] modeOrder = { PortableTransportModes.Metro, PortableTransportModes.Train, PortableTransportModes.Bus, PortableTransportModes.Tram };
+            bool first = true;
+            foreach (string mode in modeOrder)
+            {
+                if (mode != PortableTransportModes.Metro
+                    && (snapshot == null || !snapshot.Lines.Any(line => string.Equals(line.Mode, mode, StringComparison.OrdinalIgnoreCase))))
+                {
+                    continue;
+                }
+
+                if (!first)
+                {
+                    builder.Append(',');
+                }
+
+                first = false;
+                builder.Append('{');
+                AppendJsonString(builder, "mode", mode);
+                AppendJsonString(builder, "label", GetModeLabel(mode));
+                AppendJsonBoolean(builder, "enabled", m_VisibleModes.Contains(mode));
+                AppendJsonNumber(
+                    builder,
+                    "lineCount",
+                    snapshot == null
+                        ? 0
+                        : snapshot.Lines.Count(line => string.Equals(line.Mode, mode, StringComparison.OrdinalIgnoreCase)));
+                if (builder[builder.Length - 1] == ',')
+                {
+                    builder.Length--;
+                }
+
+                builder.Append('}');
+            }
+
+            builder.Append("],");
+            AppendJsonString(builder, "enabledModes", PortableTransportModes.ToTokenList(m_VisibleModes));
+        }
+
+        private static string GetModeLabel(string mode)
+        {
+            switch (mode)
+            {
+                case PortableTransportModes.Metro:
+                    return "Metro";
+                case PortableTransportModes.Train:
+                    return "Intercity rail";
+                case PortableTransportModes.Bus:
+                    return "Bus";
+                case PortableTransportModes.Tram:
+                    return "Tram";
+                default:
+                    return mode;
+            }
         }
 
         private static void AppendJsonString(StringBuilder builder, string name, string value)

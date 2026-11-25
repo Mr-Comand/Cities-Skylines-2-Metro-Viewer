@@ -118,9 +118,9 @@ namespace MetroDiagram.Engine
             PortableRenderOptions options,
             IReadOnlyList<DisplayRoute> routes)
         {
-            bool hasMetro = routes.Any(route => !IsIntercityLine(route.Line));
-            bool hasIntercity = routes.Any(route => IsIntercityLine(route.Line));
-            if (!hasMetro || !hasIntercity)
+            bool hasMetro = routes.Any(route => GetLineGroup(route.Line) == LineGroupMetro);
+            bool hasOtherMode = routes.Any(route => GetLineGroup(route.Line) != LineGroupMetro);
+            if (!hasMetro || !hasOtherMode)
             {
                 return options;
             }
@@ -153,6 +153,7 @@ namespace MetroDiagram.Engine
                 HideCrowdedLabels = options.HideCrowdedLabels,
                 MergeServiceFamilies = options.MergeServiceFamilies,
                 ShowIntercityRail = options.ShowIntercityRail,
+                VisibleModes = options.VisibleModes,
                 AnnealAttemptLimit = options.AnnealAttemptLimit,
                 AdaptCanvasHeightToNetwork = options.AdaptCanvasHeightToNetwork,
                 RoundRouteCorners = options.RoundRouteCorners,
@@ -166,8 +167,8 @@ namespace MetroDiagram.Engine
             MetroNetworkSnapshot snapshot,
             PortableRenderOptions options)
         {
-            bool hasIntercity = snapshot.Lines.Any(IsIntercityLine);
-            if (!hasIntercity)
+            bool hasOverlayLines = snapshot.Lines.Any(line => GetLineGroup(line) != LineGroupMetro);
+            if (!hasOverlayLines)
             {
                 return new PortableIntercityContext(
                     snapshot.Stations.ToList(),
@@ -175,10 +176,16 @@ namespace MetroDiagram.Engine
                     new Dictionary<string, IntercityClippedGeometry>(StringComparer.Ordinal));
             }
 
-            bool showIntercity = options.ShowIntercityRail
-                && options.LayoutMode == PortableLayoutMode.Geographic;
+            // Intercity train lines keep their dedicated treatment: they are only
+            // drawn in the geographic layout and their geometry is clipped to the
+            // city envelope, because their stops extend far beyond the city.
+            // Bus and tram lines are city-local and render like metro lines.
+            // ShowIntercityRail is the legacy developer option; VisibleModes is
+            // the user-facing toggle from the in-game preview.
+            bool showTrain = options.LayoutMode == PortableLayoutMode.Geographic
+                && (options.ShowIntercityRail || options.IsModeVisible(PortableTransportModes.Train));
             List<MetroSnapshotLine> visibleLines = snapshot.Lines
-                .Where(line => !IsIntercityLine(line) || showIntercity)
+                .Where(line => IsLineVisible(line, options, showTrain))
                 .ToList();
             Dictionary<string, MetroSnapshotStation> stationsById = snapshot.Stations
                 .Where(station => !string.IsNullOrWhiteSpace(station.Id))
@@ -186,7 +193,7 @@ namespace MetroDiagram.Engine
                 .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
             HashSet<string> cityStationIds = new HashSet<string>(
                 visibleLines
-                    .Where(line => !IsIntercityLine(line))
+                    .Where(line => GetLineGroup(line) != LineGroupTrain)
                     .SelectMany(line => line.Stops)
                     .Where(stationsById.ContainsKey),
                 StringComparer.Ordinal);
@@ -195,10 +202,10 @@ namespace MetroDiagram.Engine
                 .Select(station => new GeographicPoint(station.X, station.Z))
                 .Where(point => point.IsFinite)
                 .ToList();
-            if (showIntercity && cityAnchors.Count == 0)
+            if (showTrain && cityAnchors.Count == 0)
             {
                 cityAnchors = visibleLines
-                    .Where(IsIntercityLine)
+                    .Where(line => GetLineGroup(line) == LineGroupTrain)
                     .SelectMany(line => line.Stops)
                     .Distinct(StringComparer.Ordinal)
                     .Where(stationsById.ContainsKey)
@@ -211,11 +218,11 @@ namespace MetroDiagram.Engine
             Dictionary<string, IntercityClippedGeometry> routes =
                 new Dictionary<string, IntercityClippedGeometry>(StringComparer.Ordinal);
             GeographicEnvelope? envelope = null;
-            if (showIntercity && cityAnchors.Count > 0)
+            if (showTrain && cityAnchors.Count > 0)
             {
                 IntercityGeographicGeometryOptions geometryOptions = new IntercityGeographicGeometryOptions();
                 envelope = IntercityGeographicGeometry.CreateCityEnvelope(cityAnchors, geometryOptions);
-                foreach (MetroSnapshotLine line in visibleLines.Where(IsIntercityLine))
+                foreach (MetroSnapshotLine line in visibleLines.Where(line => GetLineGroup(line) == LineGroupTrain))
                 {
                     List<GeographicPoint> routePoints = line.PathPoints
                         .Select(point => new GeographicPoint(point.X, point.Z))
@@ -249,13 +256,13 @@ namespace MetroDiagram.Engine
 
             HashSet<string> visibleStationIds = new HashSet<string>(
                 visibleLines
-                    .Where(line => !IsIntercityLine(line))
+                    .Where(line => GetLineGroup(line) != LineGroupTrain)
                     .SelectMany(line => line.Stops),
                 StringComparer.Ordinal);
-            if (showIntercity && envelope is GeographicEnvelope cityEnvelope)
+            if (showTrain && envelope is GeographicEnvelope cityEnvelope)
             {
                 foreach (string stopId in visibleLines
-                    .Where(IsIntercityLine)
+                    .Where(line => GetLineGroup(line) == LineGroupTrain)
                     .SelectMany(line => line.Stops)
                     .Distinct(StringComparer.Ordinal))
                 {
@@ -273,9 +280,43 @@ namespace MetroDiagram.Engine
             return new PortableIntercityContext(visibleStations, visibleLines, routes);
         }
 
+        // Line grouping constants: "metro" lines are the primary service, and
+        // everything else is an overlay line drawn on top of them.
+        private const string LineGroupMetro = "metro";
+        private const string LineGroupTrain = "train";
+        private const string LineGroupOverlay = "overlay";
+
+        private static string GetLineGroup(MetroSnapshotLine line)
+        {
+            if (string.Equals(line.Mode, PortableTransportModes.Metro, StringComparison.OrdinalIgnoreCase))
+            {
+                return LineGroupMetro;
+            }
+
+            if (string.Equals(line.Mode, PortableTransportModes.Train, StringComparison.OrdinalIgnoreCase))
+            {
+                return LineGroupTrain;
+            }
+
+            return LineGroupOverlay;
+        }
+
         private static bool IsIntercityLine(MetroSnapshotLine line)
         {
-            return string.Equals(line.Mode, "train", StringComparison.OrdinalIgnoreCase);
+            return GetLineGroup(line) == LineGroupTrain;
+        }
+
+        private static bool IsLineVisible(MetroSnapshotLine line, PortableRenderOptions options, bool showTrain)
+        {
+            string group = GetLineGroup(line);
+            if (group == LineGroupTrain)
+            {
+                return showTrain;
+            }
+
+            // Bus/tram overlays follow the VisibleModes toggle; metro stays
+            // visible whenever VisibleModes is unset (legacy callers).
+            return options.IsModeVisible(line.Mode);
         }
 
         private static List<DisplayRoute> ResolveDisplayRoutes(IReadOnlyList<MetroSnapshotLine> lines, bool mergeFamilies)
@@ -1363,35 +1404,59 @@ namespace MetroDiagram.Engine
 
             double legendX = options.Width - options.LegendWidth + 24;
             string legendHeader = string.IsNullOrEmpty(options.LegendHeader) ? "Lines" : options.LegendHeader!;
-            List<DisplayRoute> metroLegendRoutes = routes.Where(route => !IsIntercityLine(route.Line)).ToList();
-            List<DisplayRoute> intercityLegendRoutes = routes.Where(route => IsIntercityLine(route.Line)).ToList();
-            bool parallelModeGroups = metroLegendRoutes.Count > 0 && intercityLegendRoutes.Count > 0;
+            List<KeyValuePair<string, List<DisplayRoute>>> legendGroups = BuildLegendGroups(routes, legendHeader);
+            bool multiGroupLegend = legendGroups.Count > 1;
             svg.Append("<g class=\"legend\"");
-            if (parallelModeGroups)
+            if (multiGroupLegend)
             {
-                svg.Append(" data-legend-layout=\"parallel-mode-groups\"");
+                svg.Append(" data-legend-layout=\"")
+                    .Append(legendGroups.Count == 2 ? "parallel-mode-groups" : "stacked-mode-groups")
+                    .Append("\"");
             }
             svg.Append("><text x=\"").Append(F(legendX)).Append("\" y=\"72\" font-family=\"").Append(SvgFontFamily).Append("\" font-size=\"16\" font-weight=\"700\" fill=\"#263442\">").Append(Xml(legendHeader)).Append("</text>");
-            if (parallelModeGroups)
+            if (legendGroups.Count == 2)
             {
                 double availableWidth = Math.Max(240, options.LegendWidth - 48);
                 double groupGap = 18;
                 double groupWidth = (availableWidth - groupGap) / 2;
-                bool useChineseGroupTitles = legendHeader.Any(character => character > 127);
                 AppendPortableLegendGroup(
                     svg,
-                    metroLegendRoutes,
+                    legendGroups[0].Value,
                     legendX,
                     groupWidth,
-                    useChineseGroupTitles ? "地铁" : "Metro",
-                    "metro");
+                    GetLegendGroupTitle(legendGroups[0].Key, legendHeader),
+                    legendGroups[0].Key,
+                    98);
                 AppendPortableLegendGroup(
                     svg,
-                    intercityLegendRoutes,
+                    legendGroups[1].Value,
                     legendX + groupWidth + groupGap,
                     groupWidth,
-                    useChineseGroupTitles ? "城际铁路" : "Intercity rail",
-                    "intercity");
+                    GetLegendGroupTitle(legendGroups[1].Key, legendHeader),
+                    legendGroups[1].Key,
+                    98);
+                svg.Append("</g></svg>");
+                return svg.ToString();
+            }
+
+            if (legendGroups.Count > 2)
+            {
+                // Stacked groups: each mode gets its own titled block so the
+                // legend stays readable with three or four modes enabled.
+                double groupY = 98;
+                foreach (KeyValuePair<string, List<DisplayRoute>> legendGroup in legendGroups)
+                {
+                    AppendPortableLegendGroup(
+                        svg,
+                        legendGroup.Value,
+                        legendX,
+                        Math.Max(240, options.LegendWidth - 48),
+                        GetLegendGroupTitle(legendGroup.Key, legendHeader),
+                        legendGroup.Key,
+                        groupY);
+                    groupY += 30 + (legendGroup.Value.Count * 28);
+                }
+
                 svg.Append("</g></svg>");
                 return svg.ToString();
             }
@@ -1436,25 +1501,91 @@ namespace MetroDiagram.Engine
             return svg.ToString();
         }
 
+        private static List<KeyValuePair<string, List<DisplayRoute>>> BuildLegendGroups(
+            IReadOnlyList<DisplayRoute> routes,
+            string legendHeader)
+        {
+            // Deterministic group order: metro first, then train, bus, tram.
+            // The train group keeps the historical "intercity" legend name so
+            // existing audit scripts and tests stay stable.
+            string[] groupOrder = { PortableTransportModes.Metro, "intercity", PortableTransportModes.Bus, PortableTransportModes.Tram };
+            Dictionary<string, List<DisplayRoute>> groups = new Dictionary<string, List<DisplayRoute>>(StringComparer.Ordinal);
+            foreach (DisplayRoute route in routes)
+            {
+                string group = GetLegendGroupName(PortableTransportModes.Normalize(route.Line.Mode));
+                if (!groups.TryGetValue(group, out List<DisplayRoute> bucket))
+                {
+                    bucket = new List<DisplayRoute>();
+                    groups[group] = bucket;
+                }
+
+                bucket.Add(route);
+            }
+
+            List<KeyValuePair<string, List<DisplayRoute>>> orderedGroups = new List<KeyValuePair<string, List<DisplayRoute>>>();
+            foreach (string mode in groupOrder)
+            {
+                if (groups.TryGetValue(mode, out List<DisplayRoute> bucket) && bucket.Count > 0)
+                {
+                    orderedGroups.Add(new KeyValuePair<string, List<DisplayRoute>>(mode, bucket));
+                }
+            }
+
+            // Unknown modes fall back to a generic group so they stay visible.
+            foreach (KeyValuePair<string, List<DisplayRoute>> group in groups)
+            {
+                if (!groupOrder.Contains(group.Key))
+                {
+                    orderedGroups.Add(group);
+                }
+            }
+
+            return orderedGroups;
+        }
+
+        private static string GetLegendGroupName(string? mode)
+        {
+            return mode == PortableTransportModes.Train ? "intercity" : mode ?? PortableTransportModes.Metro;
+        }
+
+        private static string GetLegendGroupTitle(string groupName, string legendHeader)
+        {
+            bool useChineseGroupTitles = !string.IsNullOrEmpty(legendHeader) && legendHeader.Any(character => character > 127);
+            switch (groupName)
+            {
+                case PortableTransportModes.Metro:
+                    return useChineseGroupTitles ? "地铁" : "Metro";
+                case "intercity":
+                    return useChineseGroupTitles ? "城际铁路" : "Intercity rail";
+                case PortableTransportModes.Bus:
+                    return useChineseGroupTitles ? "公交" : "Bus";
+                case PortableTransportModes.Tram:
+                    return useChineseGroupTitles ? "电车" : "Tram";
+                default:
+                    return useChineseGroupTitles ? "其他" : "Other";
+            }
+        }
+
         private static void AppendPortableLegendGroup(
             StringBuilder svg,
             IReadOnlyList<DisplayRoute> routes,
             double groupX,
             double groupWidth,
             string title,
-            string groupName)
+            string groupName,
+            double titleY)
         {
             double sampleLength = Math.Min(34, Math.Max(26, groupWidth * 0.2));
             double labelX = groupX + sampleLength + 10;
             svg.Append("<g data-legend-group=\"").Append(groupName).Append("\"><text x=\"")
-                .Append(F(groupX)).Append("\" y=\"98\" font-family=\"").Append(SvgFontFamily)
+                .Append(F(groupX)).Append("\" y=\"").Append(F(titleY)).Append("\" font-family=\"").Append(SvgFontFamily)
                 .Append("\" font-size=\"12\" font-weight=\"700\" fill=\"#52616f\" data-legend-group-title=\"")
                 .Append(groupName).Append("\">").Append(Xml(title)).Append("</text>");
 
             for (int i = 0; i < routes.Count; i++)
             {
                 DisplayRoute route = routes[i];
-                double y = 126 + (i * 28);
+                double y = titleY + 28 + (i * 28);
                 if (IsIntercityLine(route.Line))
                 {
                     double legendBaseWidth = IntercityRailPatternOptions.ResolveLegendBaseWidth(7);

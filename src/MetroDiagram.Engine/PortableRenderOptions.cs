@@ -1,9 +1,88 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
 namespace MetroDiagram.Engine
 {
     public enum PortableLayoutMode
     {
         Geographic,
         SchematicAnneal
+    }
+
+    /// <summary>
+    /// Stable transport-mode tokens used by the exporter (line.Mode), the preview
+    /// options (VisibleModes) and the in-game UI. Keep these lowercase and
+    /// in sync with CS2 Metro.mjs and the state JSON keys.
+    /// </summary>
+    public static class PortableTransportModes
+    {
+        public const string Metro = "metro";
+        public const string Train = "train";
+        public const string Bus = "bus";
+        public const string Tram = "tram";
+
+        public static readonly string[] All = { Metro, Train, Bus, Tram };
+
+        public static bool IsValid(string? token)
+        {
+            foreach (string mode in All)
+            {
+                if (string.Equals(mode, token, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>Returns the canonical lowercase token, or null when unknown.</summary>
+        public static string? Normalize(string? token)
+        {
+            foreach (string mode in All)
+            {
+                if (string.Equals(mode, token, StringComparison.OrdinalIgnoreCase))
+                {
+                    return mode;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Parses a comma-separated token list into a canonical, deduplicated set.
+        /// Unknown tokens are dropped; an empty result falls back to metro so a
+        /// bad settings string can never blank out the whole map.
+        /// </summary>
+        public static HashSet<string> Parse(string? tokens)
+        {
+            HashSet<string> modes = new HashSet<string>(StringComparer.Ordinal);
+            if (!string.IsNullOrWhiteSpace(tokens))
+            {
+                foreach (string raw in tokens.Split(','))
+                {
+                    string? mode = Normalize(raw);
+                    if (mode != null)
+                    {
+                        modes.Add(mode);
+                    }
+                }
+            }
+
+            return modes.Count == 0
+                ? new HashSet<string>(StringComparer.Ordinal) { Metro }
+                : modes;
+        }
+
+        /// <summary>Serializes a mode set into a canonical, ordered token list.</summary>
+        public static string ToTokenList(IEnumerable<string> modes)
+        {
+            HashSet<string> set = new HashSet<string>(modes ?? Array.Empty<string>(), StringComparer.Ordinal);
+            List<string> ordered = All.Where(set.Contains).ToList();
+            return string.Join(",", ordered);
+        }
     }
 
     public sealed class PortableRenderOptions
@@ -37,6 +116,42 @@ namespace MetroDiagram.Engine
         /// every in-game profile until the owner validates it against CS2 data.
         /// </summary>
         public bool ShowIntercityRail { get; set; }
+
+        /// <summary>
+        /// Transport modes that should be rendered (subset of
+        /// <see cref="PortableTransportModes.All"/>). Null or empty means
+        /// "metro only", which keeps every existing render byte-identical.
+        /// The in-game preview UI populates this from the mode toggles.
+        /// </summary>
+        public IReadOnlyCollection<string> VisibleModes { get; set; }
+
+        /// <summary>
+        /// True when a line's mode is visible under the current options. Metro
+        /// is always treated as visible so legacy callers (no VisibleModes set)
+        /// keep rendering metro-only maps.
+        /// </summary>
+        public bool IsModeVisible(string mode)
+        {
+            if (string.Equals(mode, PortableTransportModes.Metro, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (VisibleModes == null || VisibleModes.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (string visible in VisibleModes)
+            {
+                if (string.Equals(visible, mode, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         public int AnnealAttemptLimit { get; set; } = 24000;
 
