@@ -61,7 +61,7 @@ namespace MetroDiagram.Engine
             HashSet<string> modes = new HashSet<string>(StringComparer.Ordinal);
             if (!string.IsNullOrWhiteSpace(tokens))
             {
-                foreach (string raw in tokens.Split(','))
+                foreach (string raw in tokens!.Split(','))
                 {
                     string? mode = Normalize(raw);
                     if (mode != null)
@@ -123,7 +123,7 @@ namespace MetroDiagram.Engine
         /// "metro only", which keeps every existing render byte-identical.
         /// The in-game preview UI populates this from the mode toggles.
         /// </summary>
-        public IReadOnlyCollection<string> VisibleModes { get; set; }
+        public IReadOnlyCollection<string>? VisibleModes { get; set; }
 
         /// <summary>
         /// True when a line's mode is visible under the current options. Metro
