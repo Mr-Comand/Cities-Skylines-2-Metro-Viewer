@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### In-game mod
+
+- Added selectable transport modes to the in-game preview: Metro / Intercity
+  rail / Bus / Tram toggles in the preview panel; the metro-only view stays the
+  default so existing behavior is unchanged.
+- Exporter classifies lines by transport type and exports bus and tram lines
+  alongside the metro network; passenger trains still flow through the
+  intercity collector.
+- Mod file version advanced to `0.1.0.15`.
+
 ### Rendering
 
 - Removed the `schematic-v2` layout mode. `schematic-map` is built on the same

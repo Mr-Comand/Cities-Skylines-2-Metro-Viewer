@@ -8,7 +8,7 @@
     <MetroDiagramViewerFileVersion>0.1.1.0</MetroDiagramViewerFileVersion>
     <MetroDiagramModVersion>0.1.0</MetroDiagramModVersion>
     <MetroDiagramModInformationalVersion>v0.1.0</MetroDiagramModInformationalVersion>
-    <MetroDiagramModFileVersion>0.1.0.14</MetroDiagramModFileVersion>
+    <MetroDiagramModFileVersion>0.1.0.15</MetroDiagramModFileVersion>
 
     <Version>$(MetroDiagramViewerVersion)</Version>
     <AssemblyVersion>0.1.0.0</AssemblyVersion>

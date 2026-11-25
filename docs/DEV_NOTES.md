@@ -18,6 +18,17 @@
   owner acceptance, advance the Mod release train separately from Viewer
   `v0.1.1`.
 
+## 2026-11-25 Selectable public transport modes (unreleased)
+
+- Added selectable transport modes to the in-game preview: the preview panel
+  now offers Metro / Intercity rail / Bus / Tram toggles instead of the
+  metro-only view.
+- Exporter classifies every `TransportLine` by its prefab transport type
+  (`ResolveLineMode`) and exports bus and tram lines alongside the metro
+  network; passenger trains still flow through the intercity collector.
+- Mod file version advanced from `0.1.0.14` to `0.1.0.15` so Windows artifacts
+  remain distinguishable even though assembly compatibility stays `0.1.0.0`.
+
 ## 2026-08-04 In-game Mod 0.1.0 stable release
 
 - Promoted only the in-game Mod from public `0.1.0-beta.8` to stable `0.1.0`;
